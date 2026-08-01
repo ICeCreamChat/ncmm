@@ -147,4 +147,4 @@ jobs:
       - name: Remove private runtime files
         if: always()
         shell: bash
-        run: rm -rf "${RUNNER_TEMP}/ncmm" "${RUNNER_TEMP}/ncmm-run.log"
+        run: sudo rm -rf "${RUNNER_TEMP}/ncmm" "${RUNNER_TEMP}/ncmm-run.log"
