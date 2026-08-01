@@ -1,7 +1,16 @@
-name: Daily ncmm sign-in
+name: Daily ncmm musician tasks
 
 on:
   workflow_dispatch:
+    inputs:
+      run_mode:
+        description: Run a status check or all configured tasks
+        required: true
+        type: choice
+        options:
+          - status
+          - full
+        default: status
   schedule:
     # GitHub cron uses UTC. 19:17 UTC is 03:17 the next day in Beijing.
     - cron: "17 19 * * *"
@@ -15,12 +24,15 @@ concurrency:
 
 jobs:
   sign-in:
-    name: Sign in
+    name: Run ncmm
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 355
     env:
       NCMM_IMAGE: ghcr.io/3899/ncmm:1.1.12
-      NCMM_COOKIE_B64: ${{ secrets.NCMM_COOKIE_B64 }}
+      NCMM_RUN_MODE: ${{ inputs.run_mode || 'full' }}
+      NCMM_MAIN_COOKIE_B64: ${{ secrets.NCMM_MAIN_COOKIE_B64 }}
+      NCMM_FAN1_COOKIE_B64: ${{ secrets.NCMM_FAN1_COOKIE_B64 }}
+      NCMM_FAN2_COOKIE_B64: ${{ secrets.NCMM_FAN2_COOKIE_B64 }}
 
     steps:
       - name: Check out configuration source
@@ -31,15 +43,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -z "${NCMM_COOKIE_B64}" ]]; then
-            echo "Missing repository secret: NCMM_COOKIE_B64" >&2
-            exit 1
-          fi
-
           install -d -m 700 "${RUNNER_TEMP}/ncmm"
-          printf '%s' "${NCMM_COOKIE_B64}" | base64 --decode > "${RUNNER_TEMP}/ncmm/cookie.json"
-          chmod 600 "${RUNNER_TEMP}/ncmm/cookie.json"
-          jq -e 'type == "object"' "${RUNNER_TEMP}/ncmm/cookie.json" >/dev/null
+
+          write_cookie() {
+            local secret_name="$1"
+            local secret_value="$2"
+            local output_name="$3"
+
+            if [[ -z "${secret_value}" ]]; then
+              echo "Missing repository secret: ${secret_name}" >&2
+              exit 1
+            fi
+
+            printf '%s' "${secret_value}" | base64 --decode > "${RUNNER_TEMP}/ncmm/${output_name}"
+            chmod 600 "${RUNNER_TEMP}/ncmm/${output_name}"
+            jq -e 'type == "object"' "${RUNNER_TEMP}/ncmm/${output_name}" >/dev/null
+          }
+
+          write_cookie "NCMM_MAIN_COOKIE_B64" "${NCMM_MAIN_COOKIE_B64}" "cookie.json"
+          write_cookie "NCMM_FAN1_COOKIE_B64" "${NCMM_FAN1_COOKIE_B64}" "fan1.json"
+          write_cookie "NCMM_FAN2_COOKIE_B64" "${NCMM_FAN2_COOKIE_B64}" "fan2.json"
 
           cp config/config.yaml "${RUNNER_TEMP}/ncmm/config.yaml"
           CONFIG_PATH="${RUNNER_TEMP}/ncmm/config.yaml" ruby <<'RUBY'
@@ -49,12 +72,12 @@ jobs:
           config = YAML.load_file(path)
 
           config["accounts"]["main"] = "./cookie.json"
-          config["accounts"]["secondary"] = []
+          config["accounts"]["secondary"] = ["./fan1.json", "./fan2.json"]
           config["accounts"]["antiCheatTokens"] = {}
 
           config["sign"]["automatic"] = false
           config["sign"]["enableMain"] = true
-          config["sign"]["enableSecondaries"] = false
+          config["sign"]["enableSecondaries"] = true
           config["sign"]["enableVipTask"] = false
           config["sign"]["yunbeiTask"].keys.each do |task|
             config["sign"]["yunbeiTask"][task] = false
@@ -67,8 +90,13 @@ jobs:
 
           config["playids"]["enableMain"] = false
           config["playids"]["enableSecondaries"] = false
-          config["musician"]["enableMain"] = false
+          config["musician"]["enableMain"] = true
           config["musician"]["enableSecondaries"] = false
+          config["musician"]["enableVipNote"] = ENV.fetch("NCMM_RUN_MODE") == "full"
+          config["musician"]["enableVipPlay"] = ENV.fetch("NCMM_RUN_MODE") == "full"
+          config["musician"]["play"]["ids"] = "2721714728,2721485994"
+          config["musician"]["play"]["idsFile"] = []
+          config["note"]["autoDelete"] = true
           config["fansgroup"]["enableMain"] = false
           config["fansgroup"]["enableSecondaries"] = false
           config["dailySongShare"]["enableMain"] = false
@@ -88,17 +116,28 @@ jobs:
           RUBY
           chmod 600 "${RUNNER_TEMP}/ncmm/config.yaml"
 
-      - name: Run basic sign-in
+      - name: Run ncmm
         shell: bash
         run: |
           set -euo pipefail
 
           docker pull "${NCMM_IMAGE}"
-          timeout 9m docker run --rm \
-            --name ncmm-daily-sign-in \
-            --env TZ=Asia/Shanghai \
-            --volume "${RUNNER_TEMP}/ncmm:/data" \
-            "${NCMM_IMAGE}" sign 2>&1 | tee "${RUNNER_TEMP}/ncmm-run.log"
+
+          run_ncmm() {
+            local duration="$1"
+            shift
+            timeout "${duration}" docker run --rm \
+              --env TZ=Asia/Shanghai \
+              --volume "${RUNNER_TEMP}/ncmm:/data" \
+              "${NCMM_IMAGE}" "$@"
+          }
+
+          if [[ "${NCMM_RUN_MODE}" == "status" ]]; then
+            run_ncmm 5m musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-run.log"
+          else
+            run_ncmm 5m sign 2>&1 | tee "${RUNNER_TEMP}/ncmm-run.log"
+            run_ncmm 345m musician 2>&1 | tee -a "${RUNNER_TEMP}/ncmm-run.log"
+          fi
 
           if grep -Eq 'Cookie.*失效|需要登录|签到失败|主账号签到失败|❌' "${RUNNER_TEMP}/ncmm-run.log"; then
             echo "ncmm reported an account or sign-in failure." >&2
