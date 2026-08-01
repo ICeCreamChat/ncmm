@@ -93,7 +93,7 @@ jobs:
           config["musician"]["enableMain"] = true
           config["musician"]["enableSecondaries"] = false
           config["musician"]["enableVipNote"] = ENV.fetch("NCMM_RUN_MODE") == "full"
-          config["musician"]["enableVipPlay"] = ENV.fetch("NCMM_RUN_MODE") == "full"
+          config["musician"]["enableVipPlay"] = false
           config["musician"]["play"]["ids"] = "2721714728,2721485994"
           config["musician"]["play"]["idsFile"] = []
           config["note"]["autoDelete"] = true
@@ -132,16 +132,39 @@ jobs:
               "${NCMM_IMAGE}" "$@"
           }
 
+          assert_no_failures() {
+            if grep -Eq 'Cookie.*失效|需要登录|签到失败|主账号签到失败|❌' "${RUNNER_TEMP}/ncmm-run.log"; then
+              echo "ncmm reported an account or task failure." >&2
+              exit 1
+            fi
+          }
+
           if [[ "${NCMM_RUN_MODE}" == "status" ]]; then
             run_ncmm 5m musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-run.log"
+            assert_no_failures
           else
             run_ncmm 5m sign 2>&1 | tee "${RUNNER_TEMP}/ncmm-run.log"
-            run_ncmm 345m musician 2>&1 | tee -a "${RUNNER_TEMP}/ncmm-run.log"
-          fi
+            assert_no_failures
 
-          if grep -Eq 'Cookie.*失效|需要登录|签到失败|主账号签到失败|❌' "${RUNNER_TEMP}/ncmm-run.log"; then
-            echo "ncmm reported an account or sign-in failure." >&2
-            exit 1
+            run_ncmm 5m musician-sign 2>&1 | tee -a "${RUNNER_TEMP}/ncmm-run.log"
+            assert_no_failures
+
+            # Publish today's note before the long-running relay play phase.
+            run_ncmm 10m musician-vip 2>&1 | tee -a "${RUNNER_TEMP}/ncmm-run.log"
+            assert_no_failures
+
+            CONFIG_PATH="${RUNNER_TEMP}/ncmm/config.yaml" ruby <<'RUBY'
+          require "yaml"
+
+          path = ENV.fetch("CONFIG_PATH")
+          config = YAML.load_file(path)
+          config["musician"]["enableVipNote"] = false
+          config["musician"]["enableVipPlay"] = true
+          File.write(path, YAML.dump(config))
+          RUBY
+
+            run_ncmm 330m musician-vip 2>&1 | tee -a "${RUNNER_TEMP}/ncmm-run.log"
+            assert_no_failures
           fi
 
       - name: Remove private runtime files
