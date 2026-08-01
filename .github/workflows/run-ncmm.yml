@@ -35,10 +35,30 @@ jobs:
       NCMM_FAN2_COOKIE_B64: ${{ secrets.NCMM_FAN2_COOKIE_B64 }}
 
     steps:
+      - name: Resolve Beijing month
+        id: month
+        shell: bash
+        run: echo "value=$(TZ=Asia/Shanghai date +%Y-%m)" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore this month's completion marker
+        id: completion-cache
+        if: env.NCMM_RUN_MODE != 'status'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/ncmm-month-complete
+          key: ncmm-musician-complete-${{ steps.month.outputs.value }}
+
+      - name: Skip completed month
+        if: env.NCMM_RUN_MODE != 'status' && steps.completion-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: echo "Musician VIP tasks are already complete for ${{ steps.month.outputs.value }}; no account request is needed."
+
       - name: Check out configuration source
+        if: env.NCMM_RUN_MODE == 'status' || steps.completion-cache.outputs.cache-hit != 'true'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Prepare private runtime files
+        if: env.NCMM_RUN_MODE == 'status' || steps.completion-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -92,7 +112,7 @@ jobs:
           config["playids"]["enableSecondaries"] = false
           config["musician"]["enableMain"] = true
           config["musician"]["enableSecondaries"] = false
-          config["musician"]["enableVipNote"] = ENV.fetch("NCMM_RUN_MODE") == "full"
+          config["musician"]["enableVipNote"] = false
           config["musician"]["enableVipPlay"] = false
           config["musician"]["play"]["ids"] = "2721714728,2721485994"
           config["musician"]["play"]["idsFile"] = []
@@ -116,8 +136,9 @@ jobs:
           RUBY
           chmod 600 "${RUNNER_TEMP}/ncmm/config.yaml"
 
-      - name: Check musician status
-        if: env.NCMM_RUN_MODE == 'status'
+      - name: Inspect current musician progress
+        id: progress-before
+        if: env.NCMM_RUN_MODE == 'status' || steps.completion-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -128,8 +149,19 @@ jobs:
             "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-status.log"
           ! grep -Eq 'Cookie.*失效|需要登录|❌' "${RUNNER_TEMP}/ncmm-status.log"
 
+          play_progress="$(sed -nE '/近30天所有发布歌曲有效播放达650次/{s/.*进度: ([0-9]+)\/650.*/\1/p;q}' "${RUNNER_TEMP}/ncmm-status.log")"
+          note_progress="$(sed -nE '/发布图文笔记天数/{s/.*进度: ([0-9]+)\/4.*/\1/p;q}' "${RUNNER_TEMP}/ncmm-status.log")"
+          echo "Observed musician progress: play=${play_progress:-unknown}/650, note=${note_progress:-unknown}/4"
+
+          if [[ "${play_progress:-0}" -ge 650 && "${note_progress:-0}" -ge 4 ]]; then
+            echo "complete=true" >> "${GITHUB_OUTPUT}"
+            echo "Both musician VIP tasks are complete."
+          else
+            echo "complete=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Run basic sign-in
-        if: env.NCMM_RUN_MODE == 'full'
+        if: env.NCMM_RUN_MODE == 'full' && steps.completion-cache.outputs.cache-hit != 'true' && steps.progress-before.outputs.complete != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -140,7 +172,7 @@ jobs:
           ! grep -Eq 'Cookie.*失效|需要登录|签到失败|主账号签到失败|❌' "${RUNNER_TEMP}/ncmm-sign.log"
 
       - name: Run musician sign-in
-        if: env.NCMM_RUN_MODE == 'full'
+        if: env.NCMM_RUN_MODE == 'full' && steps.completion-cache.outputs.cache-hit != 'true' && steps.progress-before.outputs.complete != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -151,10 +183,20 @@ jobs:
           ! grep -Eq 'Cookie.*失效|需要登录|签到失败|主账号签到失败|❌' "${RUNNER_TEMP}/ncmm-musician-sign.log"
 
       - name: Publish musician note
-        if: env.NCMM_RUN_MODE == 'full'
+        if: env.NCMM_RUN_MODE == 'full' && steps.completion-cache.outputs.cache-hit != 'true' && steps.progress-before.outputs.complete != 'true'
         shell: bash
         run: |
           set -euo pipefail
+          CONFIG_PATH="${RUNNER_TEMP}/ncmm/config.yaml" ruby <<'RUBY'
+          require "yaml"
+
+          path = ENV.fetch("CONFIG_PATH")
+          config = YAML.load_file(path)
+          config["musician"]["enableVipNote"] = true
+          config["musician"]["enableVipPlay"] = false
+          File.write(path, YAML.dump(config))
+          RUBY
+
           timeout 10m docker run --rm \
             --env TZ=Asia/Shanghai \
             --volume "${RUNNER_TEMP}/ncmm:/data" \
@@ -162,7 +204,7 @@ jobs:
           ! grep -Eq 'Cookie.*失效|需要登录|笔记任务失败|❌' "${RUNNER_TEMP}/ncmm-note.log"
 
       - name: Relay play with fan accounts
-        if: env.NCMM_RUN_MODE == 'full'
+        if: env.NCMM_RUN_MODE == 'full' && steps.completion-cache.outputs.cache-hit != 'true' && steps.progress-before.outputs.complete != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -181,6 +223,54 @@ jobs:
             --volume "${RUNNER_TEMP}/ncmm:/data" \
             "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-play.log"
           ! grep -Eq 'Cookie.*失效|需要登录|播放任务失败|❌' "${RUNNER_TEMP}/ncmm-play.log"
+
+      - name: Confirm musician tasks after run
+        id: progress-after
+        if: env.NCMM_RUN_MODE == 'full' && steps.completion-cache.outputs.cache-hit != 'true' && steps.progress-before.outputs.complete != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONFIG_PATH="${RUNNER_TEMP}/ncmm/config.yaml" ruby <<'RUBY'
+          require "yaml"
+
+          path = ENV.fetch("CONFIG_PATH")
+          config = YAML.load_file(path)
+          config["musician"]["enableVipNote"] = false
+          config["musician"]["enableVipPlay"] = false
+          File.write(path, YAML.dump(config))
+          RUBY
+
+          timeout 5m docker run --rm \
+            --env TZ=Asia/Shanghai \
+            --volume "${RUNNER_TEMP}/ncmm:/data" \
+            "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-final-status.log"
+          ! grep -Eq 'Cookie.*失效|需要登录|❌' "${RUNNER_TEMP}/ncmm-final-status.log"
+
+          play_progress="$(sed -nE '/近30天所有发布歌曲有效播放达650次/{s/.*进度: ([0-9]+)\/650.*/\1/p;q}' "${RUNNER_TEMP}/ncmm-final-status.log")"
+          note_progress="$(sed -nE '/发布图文笔记天数/{s/.*进度: ([0-9]+)\/4.*/\1/p;q}' "${RUNNER_TEMP}/ncmm-final-status.log")"
+          echo "Observed musician progress: play=${play_progress:-unknown}/650, note=${note_progress:-unknown}/4"
+
+          if [[ "${play_progress:-0}" -ge 650 && "${note_progress:-0}" -ge 4 ]]; then
+            echo "complete=true" >> "${GITHUB_OUTPUT}"
+            echo "Both musician VIP tasks are now complete."
+          else
+            echo "complete=false" >> "${GITHUB_OUTPUT}"
+            echo "At least one musician VIP task remains; the next scheduled run will continue."
+          fi
+
+      - name: Create this month's completion marker
+        if: env.NCMM_RUN_MODE == 'full' && steps.completion-cache.outputs.cache-hit != 'true' && (steps.progress-before.outputs.complete == 'true' || steps.progress-after.outputs.complete == 'true')
+        shell: bash
+        run: |
+          install -d "${RUNNER_TEMP}/ncmm-month-complete"
+          printf '%s\n' "${{ steps.month.outputs.value }}" > "${RUNNER_TEMP}/ncmm-month-complete/month.txt"
+
+      - name: Save this month's completion marker
+        if: env.NCMM_RUN_MODE == 'full' && steps.completion-cache.outputs.cache-hit != 'true' && (steps.progress-before.outputs.complete == 'true' || steps.progress-after.outputs.complete == 'true')
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/ncmm-month-complete
+          key: ncmm-musician-complete-${{ steps.month.outputs.value }}
 
       - name: Remove private runtime files
         if: always()
