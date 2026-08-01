@@ -116,44 +116,57 @@ jobs:
           RUBY
           chmod 600 "${RUNNER_TEMP}/ncmm/config.yaml"
 
-      - name: Run ncmm
+      - name: Check musician status
+        if: env.NCMM_RUN_MODE == 'status'
         shell: bash
         run: |
           set -euo pipefail
-
           docker pull "${NCMM_IMAGE}"
+          timeout 5m docker run --rm \
+            --env TZ=Asia/Shanghai \
+            --volume "${RUNNER_TEMP}/ncmm:/data" \
+            "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-status.log"
+          ! grep -Eq 'Cookie.*失效|需要登录|❌' "${RUNNER_TEMP}/ncmm-status.log"
 
-          run_ncmm() {
-            local duration="$1"
-            shift
-            timeout "${duration}" docker run --rm \
-              --env TZ=Asia/Shanghai \
-              --volume "${RUNNER_TEMP}/ncmm:/data" \
-              "${NCMM_IMAGE}" "$@"
-          }
+      - name: Run basic sign-in
+        if: env.NCMM_RUN_MODE == 'full'
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 5m docker run --rm \
+            --env TZ=Asia/Shanghai \
+            --volume "${RUNNER_TEMP}/ncmm:/data" \
+            "${NCMM_IMAGE}" sign 2>&1 | tee "${RUNNER_TEMP}/ncmm-sign.log"
+          ! grep -Eq 'Cookie.*失效|需要登录|签到失败|主账号签到失败|❌' "${RUNNER_TEMP}/ncmm-sign.log"
 
-          assert_no_failures() {
-            if grep -Eq 'Cookie.*失效|需要登录|签到失败|主账号签到失败|❌' "${RUNNER_TEMP}/ncmm-run.log"; then
-              echo "ncmm reported an account or task failure." >&2
-              exit 1
-            fi
-          }
+      - name: Run musician sign-in
+        if: env.NCMM_RUN_MODE == 'full'
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 5m docker run --rm \
+            --env TZ=Asia/Shanghai \
+            --volume "${RUNNER_TEMP}/ncmm:/data" \
+            "${NCMM_IMAGE}" musician-sign 2>&1 | tee "${RUNNER_TEMP}/ncmm-musician-sign.log"
+          ! grep -Eq 'Cookie.*失效|需要登录|签到失败|主账号签到失败|❌' "${RUNNER_TEMP}/ncmm-musician-sign.log"
 
-          if [[ "${NCMM_RUN_MODE}" == "status" ]]; then
-            run_ncmm 5m musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-run.log"
-            assert_no_failures
-          else
-            run_ncmm 5m sign 2>&1 | tee "${RUNNER_TEMP}/ncmm-run.log"
-            assert_no_failures
+      - name: Publish musician note
+        if: env.NCMM_RUN_MODE == 'full'
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 10m docker run --rm \
+            --env TZ=Asia/Shanghai \
+            --volume "${RUNNER_TEMP}/ncmm:/data" \
+            "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-note.log"
+          ! grep -Eq 'Cookie.*失效|需要登录|笔记任务失败|❌' "${RUNNER_TEMP}/ncmm-note.log"
 
-            run_ncmm 5m musician-sign 2>&1 | tee -a "${RUNNER_TEMP}/ncmm-run.log"
-            assert_no_failures
-
-            # Publish today's note before the long-running relay play phase.
-            run_ncmm 10m musician-vip 2>&1 | tee -a "${RUNNER_TEMP}/ncmm-run.log"
-            assert_no_failures
-
-            CONFIG_PATH="${RUNNER_TEMP}/ncmm/config.yaml" ruby <<'RUBY'
+      - name: Relay play with fan accounts
+        if: env.NCMM_RUN_MODE == 'full'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONFIG_PATH="${RUNNER_TEMP}/ncmm/config.yaml" ruby <<'RUBY'
           require "yaml"
 
           path = ENV.fetch("CONFIG_PATH")
@@ -163,11 +176,13 @@ jobs:
           File.write(path, YAML.dump(config))
           RUBY
 
-            run_ncmm 330m musician-vip 2>&1 | tee -a "${RUNNER_TEMP}/ncmm-run.log"
-            assert_no_failures
-          fi
+          timeout 330m docker run --rm \
+            --env TZ=Asia/Shanghai \
+            --volume "${RUNNER_TEMP}/ncmm:/data" \
+            "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-play.log"
+          ! grep -Eq 'Cookie.*失效|需要登录|播放任务失败|❌' "${RUNNER_TEMP}/ncmm-play.log"
 
       - name: Remove private runtime files
         if: always()
         shell: bash
-        run: sudo rm -rf "${RUNNER_TEMP}/ncmm" "${RUNNER_TEMP}/ncmm-run.log"
+        run: sudo rm -rf "${RUNNER_TEMP}/ncmm" "${RUNNER_TEMP}"/ncmm-*.log
