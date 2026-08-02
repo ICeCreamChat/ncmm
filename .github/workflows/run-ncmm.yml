@@ -201,7 +201,11 @@ jobs:
             --env TZ=Asia/Shanghai \
             --volume "${RUNNER_TEMP}/ncmm:/data" \
             "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-note.log"
-          ! grep -Eq 'Cookie.*失效|需要登录|笔记任务失败|❌' "${RUNNER_TEMP}/ncmm-note.log"
+          ! grep -Eq 'Cookie.*失效|需要登录' "${RUNNER_TEMP}/ncmm-note.log"
+
+          if grep -Eq '笔记任务失败|❌' "${RUNNER_TEMP}/ncmm-note.log"; then
+            echo "::warning::Musician note was not accepted by NetEase; relay playback will continue and the next scheduled run will retry the note."
+          fi
 
       - name: Relay play with fan accounts
         if: env.NCMM_RUN_MODE == 'full' && steps.completion-cache.outputs.cache-hit != 'true' && steps.progress-before.outputs.complete != 'true'
