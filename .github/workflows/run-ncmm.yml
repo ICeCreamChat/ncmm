@@ -12,8 +12,8 @@ on:
           - full
         default: status
   schedule:
-    # GitHub cron uses UTC. 19:17 UTC is 03:17 the next day in Beijing.
-    - cron: "17 19 * * *"
+    # GitHub cron uses UTC. 23:00 UTC is 07:00 the next day in Beijing.
+    - cron: "0 23 * * *"
 
 permissions:
   contents: read
