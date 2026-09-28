@@ -197,14 +197,26 @@ jobs:
           File.write(path, YAML.dump(config))
           RUBY
 
+          set +e
           timeout 10m docker run --rm \
             --env TZ=Asia/Shanghai \
             --volume "${RUNNER_TEMP}/ncmm:/data" \
             "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-note.log"
-          ! grep -Eq 'Cookie.*失效|需要登录' "${RUNNER_TEMP}/ncmm-note.log"
+          note_exit=${PIPESTATUS[0]}
+          set -e
 
-          if grep -Eq '笔记任务失败|❌' "${RUNNER_TEMP}/ncmm-note.log"; then
-            echo "::warning::Musician note was not accepted by NetEase; relay playback will continue and the next scheduled run will retry the note."
+          if grep -Eq 'Cookie.*失效|需要登录' "${RUNNER_TEMP}/ncmm-note.log"; then
+            echo "Musician note failed because an account cookie is invalid." >&2
+            exit 1
+          fi
+
+          if [[ "${note_exit}" -ne 0 ]]; then
+            if grep -Eq 'code=250|笔记任务失败|发布动态失败' "${RUNNER_TEMP}/ncmm-note.log"; then
+              echo "::warning::Musician note was rejected by NetEase (exit ${note_exit}); relay playback will continue and the next scheduled run will retry the note."
+            else
+              echo "Musician note container failed with exit ${note_exit}; see ncmm-note.log." >&2
+              exit "${note_exit}"
+            fi
           fi
 
       - name: Relay play with fan accounts
