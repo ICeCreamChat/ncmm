@@ -25,7 +25,7 @@ concurrency:
 jobs:
   sign-in:
     name: Run ncmm
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 355
     env:
       NCMM_IMAGE: ghcr.io/3899/ncmm:1.1.12
@@ -55,7 +55,7 @@ jobs:
 
       - name: Check out configuration source
         if: env.NCMM_RUN_MODE == 'status' || steps.completion-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Prepare private runtime files
         if: env.NCMM_RUN_MODE == 'status' || steps.completion-cache.outputs.cache-hit != 'true'
