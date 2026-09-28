@@ -43,7 +43,7 @@ jobs:
       - name: Restore this month's completion marker
         id: completion-cache
         if: env.NCMM_RUN_MODE != 'status'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ runner.temp }}/ncmm-month-complete
           key: ncmm-musician-complete-${{ steps.month.outputs.value }}
@@ -283,7 +283,7 @@ jobs:
 
       - name: Save this month's completion marker
         if: env.NCMM_RUN_MODE == 'full' && steps.completion-cache.outputs.cache-hit != 'true' && (steps.progress-before.outputs.complete == 'true' || steps.progress-after.outputs.complete == 'true')
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ runner.temp }}/ncmm-month-complete
           key: ncmm-musician-complete-${{ steps.month.outputs.value }}
