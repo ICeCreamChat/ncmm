@@ -732,8 +732,13 @@ func (c *Musician) doVipPhase(ctx context.Context, mctx *musicianContext, cookie
 	// 遍历子任务，检查并执行
 	for _, sub := range mctx.resp.Data.FurtherTask.Children {
 		progress := sub.ProgressRate
-		if sub.MissionCode == "mission_code_recently_play_count" {
-			progress = mctx.resp.Data.RecentPlayCount30
+		if sub.MissionCode == "mission_code_recently_play_count" || sub.MissionCode == "mission_code_recently_play_effect_count_v2" {
+			// Newer API responses report the effective-play mission under
+			// mission_code_recently_play_effect_count_v2 and carry progress on the
+			// child task itself. Keep the legacy code for older responses.
+			if sub.MissionCode == "mission_code_recently_play_count" && progress <= 0 {
+				progress = mctx.resp.Data.RecentPlayCount30
+			}
 		}
 		c.cmd.Printf("    - 任务: %-15s — 状态: %d, 进度: %d/%d\n",
 			sub.Name, sub.MissionStatus, progress, sub.TotalCompleteNum)
@@ -759,12 +764,18 @@ func (c *Musician) doVipPhase(ctx context.Context, mctx *musicianContext, cookie
 				}
 			}
 
-		case "mission_code_recently_play_count":
+		case "mission_code_recently_play_count", "mission_code_recently_play_effect_count_v2":
 			if c.root.Cfg.Musician.EnableVipPlay != nil && !*c.root.Cfg.Musician.EnableVipPlay {
 				c.cmd.Println("    ℹ️ 播放任务已在配置中关闭 (enableVipPlay = false)，跳过")
-			} else if err := c.handlePlayTask(ctx, mctx.cli, sub, mctx.resp.Data.RecentPlayCount30); err != nil {
-				log.Error("    ❌ 播放任务执行失败: %s", err)
-				c.cmd.Printf("    ❌ 播放任务失败: %s\n", err)
+			} else {
+				currentPlayProgress := progress
+				if sub.MissionCode == "mission_code_recently_play_count" && currentPlayProgress <= 0 {
+					currentPlayProgress = mctx.resp.Data.RecentPlayCount30
+				}
+				if err := c.handlePlayTask(ctx, mctx.cli, sub, currentPlayProgress); err != nil {
+					log.Error("    ❌ 播放任务执行失败: %s", err)
+					c.cmd.Printf("    ❌ 播放任务失败: %s\n", err)
+				}
 			}
 
 		default:
