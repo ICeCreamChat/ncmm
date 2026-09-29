@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     env:
-      NCMM_IMAGE: ghcr.io/3899/ncmm:1.1.12
+      NCMM_IMAGE: ghcr.io/icecreamchat/ncmm:1.1.13
       NCMM_RUN_MODE: ${{ inputs.run_mode || 'full' }}
       NCMM_MAIN_COOKIE_B64: ${{ secrets.NCMM_MAIN_COOKIE_B64 }}
       NCMM_FAN1_COOKIE_B64: ${{ secrets.NCMM_FAN1_COOKIE_B64 }}
@@ -149,11 +149,13 @@ jobs:
             "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-status.log"
           ! grep -Eq 'Cookie.*失效|需要登录|❌' "${RUNNER_TEMP}/ncmm-status.log"
 
-          play_progress="$(sed -nE '/近30天所有发布歌曲有效播放达650次|上传歌曲的近30日任务内有效播放达650次/{s/.*进度: ([0-9]+)\/[0-9]+.*/\1/p;q}' "${RUNNER_TEMP}/ncmm-status.log")"
-          note_progress="$(sed -nE '/发布图文笔记天数/{s/.*进度: ([0-9]+)\/4.*/\1/p;q}' "${RUNNER_TEMP}/ncmm-status.log")"
-          echo "Observed musician progress: play=${play_progress:-unknown}/650, note=${note_progress:-unknown}/4"
+          play_info="$(sed -nE '/近30天所有发布歌曲有效播放达650次|上传歌曲的近30日任务内有效播放达650次/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-status.log")"
+          note_info="$(sed -nE '/发布图文笔记天数/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-status.log")"
+          read -r play_status play_progress play_target <<< "${play_info}"
+          read -r note_status note_progress note_target <<< "${note_info}"
+          echo "Observed musician progress: play=${play_progress:-unknown}/${play_target:-unknown}, note=${note_progress:-unknown}/${note_target:-unknown}"
 
-          if [[ "${play_progress:-0}" -ge 650 && "${note_progress:-0}" -ge 4 ]]; then
+          if [[ "${play_status:-}" == 100 && "${note_status:-}" == 100 ]]; then
             echo "complete=true" >> "${GITHUB_OUTPUT}"
             echo "Both musician VIP tasks are complete."
           else
@@ -262,11 +264,13 @@ jobs:
             "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-final-status.log"
           ! grep -Eq 'Cookie.*失效|需要登录|❌' "${RUNNER_TEMP}/ncmm-final-status.log"
 
-          play_progress="$(sed -nE '/近30天所有发布歌曲有效播放达650次|上传歌曲的近30日任务内有效播放达650次/{s/.*进度: ([0-9]+)\/[0-9]+.*/\1/p;q}' "${RUNNER_TEMP}/ncmm-final-status.log")"
-          note_progress="$(sed -nE '/发布图文笔记天数/{s/.*进度: ([0-9]+)\/4.*/\1/p;q}' "${RUNNER_TEMP}/ncmm-final-status.log")"
-          echo "Observed musician progress: play=${play_progress:-unknown}/650, note=${note_progress:-unknown}/4"
+          play_info="$(sed -nE '/近30天所有发布歌曲有效播放达650次|上传歌曲的近30日任务内有效播放达650次/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-final-status.log")"
+          note_info="$(sed -nE '/发布图文笔记天数/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-final-status.log")"
+          read -r play_status play_progress play_target <<< "${play_info}"
+          read -r note_status note_progress note_target <<< "${note_info}"
+          echo "Observed musician progress: play=${play_progress:-unknown}/${play_target:-unknown}, note=${note_progress:-unknown}/${note_target:-unknown}"
 
-          if [[ "${play_progress:-0}" -ge 650 && "${note_progress:-0}" -ge 4 ]]; then
+          if [[ "${play_status:-}" == 100 && "${note_status:-}" == 100 ]]; then
             echo "complete=true" >> "${GITHUB_OUTPUT}"
             echo "Both musician VIP tasks are now complete."
           else
