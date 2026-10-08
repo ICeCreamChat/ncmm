@@ -26,19 +26,30 @@ type task struct {
 	Desc             string `json:"desc"`
 }
 
-func run(cookiePath string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	client, err := api.NewClient(&api.Config{
+func newStatusClient(cookiePath string) (*api.Client, error) {
+	loggerConfig := log.Config{Level: "error", Format: "text"}
+	loggerConfig.Rotate.Filename = os.DevNull
+	log.Default = log.New(&loggerConfig)
+	return api.NewClient(&api.Config{
 		Timeout: 30 * time.Second,
 		Retry:   2,
 		Cookie:  cookie.Config{Filepath: cookiePath},
 	}, log.Default)
+}
+
+func queryStatus(ctx context.Context, client *api.Client) (*eapi.MusicianVipTasksResp, error) {
+	return eapi.New(client).MusicianVipTasks(ctx, &eapi.MusicianVipTasksReq{ER: false})
+}
+
+func run(cookiePath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	client, err := newStatusClient(cookiePath)
 	if err != nil {
 		return err
 	}
 	defer client.Close(context.Background())
-	response, err := eapi.New(client).MusicianVipTasks(ctx, &eapi.MusicianVipTasksReq{ER: false})
+	response, err := queryStatus(ctx, client)
 	if err != nil {
 		return err
 	}
@@ -50,8 +61,9 @@ func run(cookiePath string) error {
 	}
 	snapshot := struct {
 		RecentPlayCount30 int    `json:"recentPlayCount30"`
+		TaskStartTime     int64  `json:"taskStartTime"`
 		Tasks             []task `json:"tasks"`
-	}{RecentPlayCount30: response.Data.RecentPlayCount30}
+	}{RecentPlayCount30: response.Data.RecentPlayCount30, TaskStartTime: response.Data.FurtherTaskStartTime}
 	fmt.Printf("近30天普通播放：%d 次（与任务进度分别记录）\n", snapshot.RecentPlayCount30)
 	for _, child := range response.Data.FurtherTask.Children {
 		snapshot.Tasks = append(snapshot.Tasks, task{
