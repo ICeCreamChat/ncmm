@@ -125,6 +125,7 @@ jobs:
           config["musician"]["play"]["idsFile"] = []
           config["playids"]["ids"] = config["musician"]["play"]["ids"]
           config["playids"]["idsFile"] = []
+          config["playids"]["playlistIds"] = []
           playback_max = Integer(ENV.fetch("NCMM_PLAYBACK_MAX", "0"))
           if playback_max > 0
             [config["playids"], config["musician"]["play"]].each do |play_config|
@@ -181,6 +182,7 @@ jobs:
             echo "- 播放任务原始进度字段：${play_progress:-unknown}/${play_target:-unknown}；服务端状态：${play_status:-unknown}"
             echo "- 笔记任务进度：${note_progress:-unknown}/${note_target:-unknown}；服务端状态：${note_status:-unknown}"
             echo '- 普通播放量不替代有效播放任务进度；完成以任务服务端状态 100 为准。'
+            sed -n 's/^NETEASE_TASK_SNAPSHOT=//p' "${RUNNER_TEMP}/ncmm-status.log" | jq -r '.tasks[] | select(.missionCode | contains("recently_play")) | "- 网易云任务说明：\(.desc)"'
           } >> "${GITHUB_STEP_SUMMARY}"
 
           if [[ "${play_status:-}" == 100 && "${note_status:-}" == 100 ]]; then
@@ -262,6 +264,11 @@ jobs:
           config["musician"]["enableVipNote"] = false
           config["musician"]["enableVipPlay"] = false
           config["playids"]["enableSecondaries"] = true
+          # The upgraded defaults include a sample playlist. Keep the target pool
+          # limited to this musician's songs after config migration as well.
+          config["playids"]["ids"] = config["musician"]["play"]["ids"]
+          config["playids"]["idsFile"] = []
+          config["playids"]["playlistIds"] = []
           File.write(path, YAML.dump(config))
           RUBY
 
