@@ -11,6 +11,11 @@ on:
           - status
           - full
         default: status
+      playback_max:
+        description: Optional lower per-account playback limit (0 uses the configured limit)
+        required: false
+        type: number
+        default: 0
   schedule:
     # GitHub cron uses UTC. 23:17 UTC is 07:17 the next day in Beijing.
     - cron: "17 23 * * *"
@@ -28,8 +33,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     env:
-      NCMM_IMAGE: ghcr.io/icecreamchat/ncmm:1.1.13
+      NCMM_IMAGE: ghcr.io/3899/ncmm:1.2.5
       NCMM_RUN_MODE: ${{ inputs.run_mode || 'full' }}
+      NCMM_PLAYBACK_MAX: ${{ inputs.playback_max || '0' }}
       NCMM_MAIN_COOKIE_B64: ${{ secrets.NCMM_MAIN_COOKIE_B64 }}
       NCMM_FAN1_COOKIE_B64: ${{ secrets.NCMM_FAN1_COOKIE_B64 }}
       NCMM_FAN2_COOKIE_B64: ${{ secrets.NCMM_FAN2_COOKIE_B64 }}
@@ -114,8 +120,16 @@ jobs:
           config["musician"]["enableSecondaries"] = false
           config["musician"]["enableVipNote"] = false
           config["musician"]["enableVipPlay"] = false
+          config["musician"]["enableVipClaim"] = false
           config["musician"]["play"]["ids"] = "2721714728,2721485994"
           config["musician"]["play"]["idsFile"] = []
+          playback_max = Integer(ENV.fetch("NCMM_PLAYBACK_MAX", "0"))
+          if playback_max > 0
+            [config["playids"], config["musician"]["play"]].each do |play_config|
+              play_config["run_min"] = [config["playids"]["run_min"], playback_max].min
+              play_config["run_max"] = [config["playids"]["run_max"], playback_max].min
+            end
+          end
           config["note"]["autoDelete"] = true
           config["fansgroup"]["enableMain"] = false
           config["fansgroup"]["enableSecondaries"] = false
@@ -125,6 +139,8 @@ jobs:
           config["vipMemberGift"]["enableSecondaries"] = false
 
           config["network"]["debug"] = false
+          config["play"] ||= {}
+          config["play"]["webSession"] = true
           config["log"]["stdout"] = true
           config["log"]["rotate"]["filename"] = "/tmp/ncmm.log"
           config["database"]["path"] = "./database/badger/"
@@ -149,11 +165,18 @@ jobs:
             "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-status.log"
           ! grep -Eq 'Cookie.*失效|需要登录|❌' "${RUNNER_TEMP}/ncmm-status.log"
 
-          play_info="$(sed -nE '/近30天所有发布歌曲有效播放达650次|上传歌曲的近30日任务内有效播放达650次/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-status.log")"
+          play_info="$(sed -nE '/任务: .*有效播放/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-status.log")"
           note_info="$(sed -nE '/发布图文笔记天数/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-status.log")"
           read -r play_status play_progress play_target <<< "${play_info}"
           read -r note_status note_progress note_target <<< "${note_info}"
           echo "Observed musician progress: play=${play_progress:-unknown}/${play_target:-unknown}, note=${note_progress:-unknown}/${note_target:-unknown}"
+          {
+            echo '### 本次运行前的网易云任务进度'
+            echo "- 使用版本：${NCMM_IMAGE}"
+            echo "- 播放任务进度：${play_progress:-unknown}/${play_target:-unknown}；服务端状态：${play_status:-unknown}"
+            echo "- 笔记任务进度：${note_progress:-unknown}/${note_target:-unknown}；服务端状态：${note_status:-unknown}"
+            echo '- 进度来自网易云任务接口；播放上报成功仍需核对任务是否计入。'
+          } >> "${GITHUB_STEP_SUMMARY}"
 
           if [[ "${play_status:-}" == 100 && "${note_status:-}" == 100 ]]; then
             echo "complete=true" >> "${GITHUB_OUTPUT}"
@@ -264,11 +287,17 @@ jobs:
             "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-final-status.log"
           ! grep -Eq 'Cookie.*失效|需要登录|❌' "${RUNNER_TEMP}/ncmm-final-status.log"
 
-          play_info="$(sed -nE '/近30天所有发布歌曲有效播放达650次|上传歌曲的近30日任务内有效播放达650次/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-final-status.log")"
+          play_info="$(sed -nE '/任务: .*有效播放/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-final-status.log")"
           note_info="$(sed -nE '/发布图文笔记天数/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-final-status.log")"
           read -r play_status play_progress play_target <<< "${play_info}"
           read -r note_status note_progress note_target <<< "${note_info}"
           echo "Observed musician progress: play=${play_progress:-unknown}/${play_target:-unknown}, note=${note_progress:-unknown}/${note_target:-unknown}"
+          {
+            echo '### 本次运行后的网易云任务进度'
+            echo "- 播放任务进度：${play_progress:-unknown}/${play_target:-unknown}；服务端状态：${play_status:-unknown}"
+            echo "- 笔记任务进度：${note_progress:-unknown}/${note_target:-unknown}；服务端状态：${note_status:-unknown}"
+            echo '- 进度未变化时尚不能确认有效计入；下次定时运行会再次查询。'
+          } >> "${GITHUB_STEP_SUMMARY}"
 
           if [[ "${play_status:-}" == 100 && "${note_status:-}" == 100 ]]; then
             echo "complete=true" >> "${GITHUB_OUTPUT}"
