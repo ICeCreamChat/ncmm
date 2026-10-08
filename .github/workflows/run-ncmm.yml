@@ -123,6 +123,8 @@ jobs:
           config["musician"]["enableVipClaim"] = false
           config["musician"]["play"]["ids"] = "2721714728,2721485994"
           config["musician"]["play"]["idsFile"] = []
+          config["playids"]["ids"] = config["musician"]["play"]["ids"]
+          config["playids"]["idsFile"] = []
           playback_max = Integer(ENV.fetch("NCMM_PLAYBACK_MAX", "0"))
           if playback_max > 0
             [config["playids"], config["musician"]["play"]].each do |play_config|
@@ -152,6 +154,11 @@ jobs:
           RUBY
           chmod 600 "${RUNNER_TEMP}/ncmm/config.yaml"
 
+      - name: Build read-only musician status query
+        if: env.NCMM_RUN_MODE == 'status' || steps.completion-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: GOTOOLCHAIN=auto go build -o "${RUNNER_TEMP}/ncmm/musician-status" .github/scripts/musician-status.go
+
       - name: Inspect current musician progress
         id: progress-before
         if: env.NCMM_RUN_MODE == 'status' || steps.completion-cache.outputs.cache-hit != 'true'
@@ -159,10 +166,8 @@ jobs:
         run: |
           set -euo pipefail
           docker pull "${NCMM_IMAGE}"
-          timeout 5m docker run --rm \
-            --env TZ=Asia/Shanghai \
-            --volume "${RUNNER_TEMP}/ncmm:/data" \
-            "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-status.log"
+          timeout 5m "${RUNNER_TEMP}/ncmm/musician-status" \
+            -cookie "${RUNNER_TEMP}/ncmm/cookie.json" 2>&1 | tee "${RUNNER_TEMP}/ncmm-status.log"
           ! grep -Eq 'Cookie.*失效|需要登录|❌' "${RUNNER_TEMP}/ncmm-status.log"
 
           play_info="$(sed -nE '/任务: .*有效播放/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-status.log")"
@@ -173,9 +178,9 @@ jobs:
           {
             echo '### 本次运行前的网易云任务进度'
             echo "- 使用版本：${NCMM_IMAGE}"
-            echo "- 播放任务进度：${play_progress:-unknown}/${play_target:-unknown}；服务端状态：${play_status:-unknown}"
+            echo "- 播放任务原始进度字段：${play_progress:-unknown}/${play_target:-unknown}；服务端状态：${play_status:-unknown}"
             echo "- 笔记任务进度：${note_progress:-unknown}/${note_target:-unknown}；服务端状态：${note_status:-unknown}"
-            echo '- 进度来自网易云任务接口；播放上报成功仍需核对任务是否计入。'
+            echo '- 普通播放量不替代有效播放任务进度；完成以任务服务端状态 100 为准。'
           } >> "${GITHUB_STEP_SUMMARY}"
 
           if [[ "${play_status:-}" == 100 && "${note_status:-}" == 100 ]]; then
@@ -190,10 +195,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          timeout 5m docker run --rm \
+          timeout 5m docker run --rm --user "$(id -u):$(id -g)" --entrypoint ncmm \
             --env TZ=Asia/Shanghai \
             --volume "${RUNNER_TEMP}/ncmm:/data" \
-            "${NCMM_IMAGE}" sign 2>&1 | tee "${RUNNER_TEMP}/ncmm-sign.log"
+            "${NCMM_IMAGE}" -c /data/config.yaml sign 2>&1 | tee "${RUNNER_TEMP}/ncmm-sign.log"
           ! grep -Eq 'Cookie.*失效|需要登录|签到失败|主账号签到失败|❌' "${RUNNER_TEMP}/ncmm-sign.log"
 
       - name: Run musician sign-in
@@ -201,10 +206,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          timeout 5m docker run --rm \
+          timeout 5m docker run --rm --user "$(id -u):$(id -g)" --entrypoint ncmm \
             --env TZ=Asia/Shanghai \
             --volume "${RUNNER_TEMP}/ncmm:/data" \
-            "${NCMM_IMAGE}" musician-sign 2>&1 | tee "${RUNNER_TEMP}/ncmm-musician-sign.log"
+            "${NCMM_IMAGE}" -c /data/config.yaml musician-sign 2>&1 | tee "${RUNNER_TEMP}/ncmm-musician-sign.log"
           ! grep -Eq 'Cookie.*失效|需要登录|签到失败|主账号签到失败|❌' "${RUNNER_TEMP}/ncmm-musician-sign.log"
 
       - name: Publish musician note
@@ -223,10 +228,10 @@ jobs:
           RUBY
 
           set +e
-          timeout 10m docker run --rm \
+          timeout 10m docker run --rm --user "$(id -u):$(id -g)" --entrypoint ncmm \
             --env TZ=Asia/Shanghai \
             --volume "${RUNNER_TEMP}/ncmm:/data" \
-            "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-note.log"
+            "${NCMM_IMAGE}" -c /data/config.yaml musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-note.log"
           note_exit=${PIPESTATUS[0]}
           set -e
 
@@ -255,15 +260,16 @@ jobs:
           path = ENV.fetch("CONFIG_PATH")
           config = YAML.load_file(path)
           config["musician"]["enableVipNote"] = false
-          config["musician"]["enableVipPlay"] = true
+          config["musician"]["enableVipPlay"] = false
+          config["playids"]["enableSecondaries"] = true
           File.write(path, YAML.dump(config))
           RUBY
 
-          timeout 330m docker run --rm \
+          timeout 330m docker run --rm --user "$(id -u):$(id -g)" --entrypoint ncmm \
             --env TZ=Asia/Shanghai \
             --volume "${RUNNER_TEMP}/ncmm:/data" \
-            "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-play.log"
-          ! grep -Eq 'Cookie.*失效|需要登录|播放任务失败|❌' "${RUNNER_TEMP}/ncmm-play.log"
+            "${NCMM_IMAGE}" -c /data/config.yaml playids 2>&1 | tee "${RUNNER_TEMP}/ncmm-play.log"
+          ! grep -Eq 'Cookie.*失效|需要登录|播放任务失败|模拟播放失败|❌' "${RUNNER_TEMP}/ncmm-play.log"
 
       - name: Confirm musician tasks after run
         id: progress-after
@@ -281,10 +287,8 @@ jobs:
           File.write(path, YAML.dump(config))
           RUBY
 
-          timeout 5m docker run --rm \
-            --env TZ=Asia/Shanghai \
-            --volume "${RUNNER_TEMP}/ncmm:/data" \
-            "${NCMM_IMAGE}" musician-vip 2>&1 | tee "${RUNNER_TEMP}/ncmm-final-status.log"
+          timeout 5m "${RUNNER_TEMP}/ncmm/musician-status" \
+            -cookie "${RUNNER_TEMP}/ncmm/cookie.json" 2>&1 | tee "${RUNNER_TEMP}/ncmm-final-status.log"
           ! grep -Eq 'Cookie.*失效|需要登录|❌' "${RUNNER_TEMP}/ncmm-final-status.log"
 
           play_info="$(sed -nE '/任务: .*有效播放/{s/.*状态: ([0-9]+), 进度: ([0-9]+)\/([0-9]+).*/\1 \2 \3/p;q}' "${RUNNER_TEMP}/ncmm-final-status.log")"
@@ -294,7 +298,7 @@ jobs:
           echo "Observed musician progress: play=${play_progress:-unknown}/${play_target:-unknown}, note=${note_progress:-unknown}/${note_target:-unknown}"
           {
             echo '### 本次运行后的网易云任务进度'
-            echo "- 播放任务进度：${play_progress:-unknown}/${play_target:-unknown}；服务端状态：${play_status:-unknown}"
+            echo "- 播放任务原始进度字段：${play_progress:-unknown}/${play_target:-unknown}；服务端状态：${play_status:-unknown}"
             echo "- 笔记任务进度：${note_progress:-unknown}/${note_target:-unknown}；服务端状态：${note_status:-unknown}"
             echo '- 进度未变化时尚不能确认有效计入；下次定时运行会再次查询。'
           } >> "${GITHUB_STEP_SUMMARY}"
